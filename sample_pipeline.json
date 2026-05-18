@@ -1,0 +1,31 @@
+{
+ "name": "CopyPipeline",
+ "properties": {
+   "activities": [
+     {
+       "name": "CopyBlobActivity",
+       "type": "Copy",
+       "inputs": [
+         {
+           "referenceName": "InputBlobDataset",
+           "type": "DatasetReference"
+         }
+       ],
+       "outputs": [
+         {
+           "referenceName": "OutputBlobDataset",
+           "type": "DatasetReference"
+         }
+       ],
+       "typeProperties": {
+         "source": {
+           "type": "BlobSource"
+         },
+         "sink": {
+           "type": "BlobSink"
+         }
+       }
+     }
+   ]
+ }
+}
