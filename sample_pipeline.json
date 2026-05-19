@@ -1,31 +1,569 @@
 {
- "name": "CopyPipeline",
- "properties": {
-   "activities": [
-     {
-       "name": "CopyBlobActivity",
-       "type": "Copy",
-       "inputs": [
-         {
-           "referenceName": "InputBlobDataset",
-           "type": "DatasetReference"
-         }
-       ],
-       "outputs": [
-         {
-           "referenceName": "OutputBlobDataset",
-           "type": "DatasetReference"
-         }
-       ],
-       "typeProperties": {
-         "source": {
-           "type": "BlobSource"
-         },
-         "sink": {
-           "type": "BlobSink"
-         }
-       }
-     }
-   ]
- }
+  "name": "Enterprise_Global_ETL_Framework",
+  "properties": {
+    "parameters": {
+      "Environment": {
+        "type": "String",
+        "defaultValue": "DEV"
+      },
+      "LoadType": {
+        "type": "String",
+        "defaultValue": "Incremental"
+      },
+      "SchemaName": {
+        "type": "String",
+        "defaultValue": "dbo"
+      },
+      "PipelineRunId": {
+        "type": "String"
+      },
+      "TriggerTime": {
+        "type": "String"
+      }
+    },
+
+    "variables": {
+      "PipelineStatus": {
+        "type": "String"
+      },
+      "CurrentTable": {
+        "type": "String"
+      },
+      "RowsCopied": {
+        "type": "Integer"
+      },
+      "ErrorMessage": {
+        "type": "String"
+      }
+    },
+
+    "activities": [
+
+      {
+        "name": "Lookup_ETL_Config",
+        "type": "Lookup",
+        "dependsOn": [],
+        "policy": {
+          "retry": 3,
+          "retryIntervalInSeconds": 30,
+          "timeout": "7.00:00:00"
+        },
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": {
+              "value": "@concat('SELECT * FROM ETL_Config WHERE IsActive = 1 AND SchemaName = ''', pipeline().parameters.SchemaName, '''')",
+              "type": "Expression"
+            }
+          },
+          "dataset": {
+            "referenceName": "DS_SQL_Config",
+            "type": "DatasetReference",
+            "parameters": {
+              "TableName": "ETL_Config"
+            }
+          },
+          "firstRowOnly": false
+        }
+      },
+
+      {
+        "name": "Lookup_Last_Watermark",
+        "type": "Lookup",
+        "dependsOn": [
+          {
+            "activity": "Lookup_ETL_Config",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "source": {
+            "type": "AzureSqlSource",
+            "sqlReaderQuery": "SELECT MAX(WatermarkValue) AS LastWatermark FROM ETL_Audit"
+          },
+          "dataset": {
+            "referenceName": "DS_SQL_Audit",
+            "type": "DatasetReference"
+          },
+          "firstRowOnly": true
+        }
+      },
+
+      {
+        "name": "Set_Pipeline_Status_Start",
+        "type": "SetVariable",
+        "dependsOn": [
+          {
+            "activity": "Lookup_Last_Watermark",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "variableName": "PipelineStatus",
+          "value": "STARTED"
+        }
+      },
+
+      {
+        "name": "ForEach_Table_Processing",
+        "type": "ForEach",
+        "dependsOn": [
+          {
+            "activity": "Set_Pipeline_Status_Start",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "items": {
+            "value": "@activity('Lookup_ETL_Config').output.value",
+            "type": "Expression"
+          },
+          "batchCount": 10,
+          "isSequential": false,
+
+          "activities": [
+
+            {
+              "name": "Set_Current_Table",
+              "type": "SetVariable",
+              "typeProperties": {
+                "variableName": "CurrentTable",
+                "value": {
+                  "value": "@item().SourceTable",
+                  "type": "Expression"
+                }
+              }
+            },
+
+            {
+              "name": "Get_Source_Metadata",
+              "type": "GetMetadata",
+              "dependsOn": [
+                {
+                  "activity": "Set_Current_Table",
+                  "dependencyConditions": ["Succeeded"]
+                }
+              ],
+              "typeProperties": {
+                "dataset": {
+                  "referenceName": "DS_Source_File",
+                  "type": "DatasetReference",
+                  "parameters": {
+                    "FileName": {
+                      "value": "@concat(item().SourceTable,'.csv')",
+                      "type": "Expression"
+                    }
+                  }
+                },
+                "fieldList": [
+                  "exists",
+                  "size",
+                  "lastModified"
+                ]
+              }
+            },
+
+            {
+              "name": "If_Source_File_Exists",
+              "type": "IfCondition",
+              "dependsOn": [
+                {
+                  "activity": "Get_Source_Metadata",
+                  "dependencyConditions": ["Succeeded"]
+                }
+              ],
+              "typeProperties": {
+
+                "expression": {
+                  "value": "@activity('Get_Source_Metadata').output.exists",
+                  "type": "Expression"
+                },
+
+                "ifTrueActivities": [
+
+                  {
+                    "name": "Copy_SQL_To_Raw",
+                    "type": "Copy",
+                    "policy": {
+                      "retry": 5,
+                      "retryIntervalInSeconds": 60
+                    },
+                    "typeProperties": {
+
+                      "source": {
+                        "type": "SqlSource",
+                        "sqlReaderQuery": {
+                          "value": "@concat('SELECT * FROM ', item().SourceTable, ' WHERE ModifiedDate > ''', activity('Lookup_Last_Watermark').output.firstRow.LastWatermark, '''')",
+                          "type": "Expression"
+                        }
+                      },
+
+                      "sink": {
+                        "type": "DelimitedTextSink",
+                        "storeSettings": {
+                          "type": "AzureBlobFSWriteSettings"
+                        }
+                      },
+
+                      "enableStaging": true
+                    },
+
+                    "inputs": [
+                      {
+                        "referenceName": "DS_SQL_Source",
+                        "type": "DatasetReference",
+                        "parameters": {
+                          "TableName": {
+                            "value": "@item().SourceTable",
+                            "type": "Expression"
+                          }
+                        }
+                      }
+                    ],
+
+                    "outputs": [
+                      {
+                        "referenceName": "DS_Raw_ADLS",
+                        "type": "DatasetReference",
+                        "parameters": {
+                          "FileName": {
+                            "value": "@concat(item().SourceTable,'.csv')",
+                            "type": "Expression"
+                          }
+                        }
+                      }
+                    ]
+                  },
+
+                  {
+                    "name": "Set_Row_Count",
+                    "type": "SetVariable",
+                    "dependsOn": [
+                      {
+                        "activity": "Copy_SQL_To_Raw",
+                        "dependencyConditions": ["Succeeded"]
+                      }
+                    ],
+                    "typeProperties": {
+                      "variableName": "RowsCopied",
+                      "value": {
+                        "value": "@activity('Copy_SQL_To_Raw').output.rowsCopied",
+                        "type": "Expression"
+                      }
+                    }
+                  },
+
+                  {
+                    "name": "If_Rows_Copied",
+                    "type": "IfCondition",
+                    "dependsOn": [
+                      {
+                        "activity": "Set_Row_Count",
+                        "dependencyConditions": ["Succeeded"]
+                      }
+                    ],
+                    "typeProperties": {
+
+                      "expression": {
+                        "value": "@greater(variables('RowsCopied'),0)",
+                        "type": "Expression"
+                      },
+
+                      "ifTrueActivities": [
+
+                        {
+                          "name": "Execute_DataFlow",
+                          "type": "ExecuteDataFlow",
+                          "typeProperties": {
+                            "dataflow": {
+                              "referenceName": "DF_Customer_Transform",
+                              "type": "DataFlowReference"
+                            },
+                            "compute": {
+                              "coreCount": 16,
+                              "computeType": "General"
+                            }
+                          }
+                        },
+
+                        {
+                          "name": "Run_Databricks_Notebook",
+                          "type": "DatabricksNotebook",
+                          "dependsOn": [
+                            {
+                              "activity": "Execute_DataFlow",
+                              "dependencyConditions": ["Succeeded"]
+                            }
+                          ],
+                          "linkedServiceName": {
+                            "referenceName": "LS_Azure_Databricks",
+                            "type": "LinkedServiceReference"
+                          },
+                          "typeProperties": {
+                            "notebookPath": "/Shared/EnterpriseNotebook",
+                            "baseParameters": {
+                              "TableName": {
+                                "value": "@item().SourceTable",
+                                "type": "Expression"
+                              },
+                              "LoadType": {
+                                "value": "@pipeline().parameters.LoadType",
+                                "type": "Expression"
+                              }
+                            }
+                          }
+                        },
+
+                        {
+                          "name": "Execute_Audit_SP",
+                          "type": "SqlServerStoredProcedure",
+                          "dependsOn": [
+                            {
+                              "activity": "Run_Databricks_Notebook",
+                              "dependencyConditions": ["Succeeded"]
+                            }
+                          ],
+                          "linkedServiceName": {
+                            "referenceName": "LS_Azure_SQL",
+                            "type": "LinkedServiceReference"
+                          },
+                          "typeProperties": {
+                            "storedProcedureName": "sp_Insert_ETL_Audit",
+                            "storedProcedureParameters": {
+                              "TableName": {
+                                "value": {
+                                  "value": "@item().SourceTable",
+                                  "type": "Expression"
+                                },
+                                "type": "String"
+                              },
+                              "RowsCopied": {
+                                "value": {
+                                  "value": "@variables('RowsCopied')",
+                                  "type": "Expression"
+                                },
+                                "type": "Int"
+                              },
+                              "PipelineRunId": {
+                                "value": {
+                                  "value": "@pipeline().RunId",
+                                  "type": "Expression"
+                                },
+                                "type": "String"
+                              }
+                            }
+                          }
+                        },
+
+                        {
+                          "name": "Delete_Raw_Files",
+                          "type": "Delete",
+                          "dependsOn": [
+                            {
+                              "activity": "Execute_Audit_SP",
+                              "dependencyConditions": ["Succeeded"]
+                            }
+                          ],
+                          "typeProperties": {
+                            "dataset": {
+                              "referenceName": "DS_Raw_ADLS",
+                              "type": "DatasetReference"
+                            },
+                            "recursive": true
+                          }
+                        }
+                      ],
+
+                      "ifFalseActivities": [
+
+                        {
+                          "name": "Web_No_Data_Alert",
+                          "type": "WebActivity",
+                          "typeProperties": {
+                            "url": "https://prod.logicapp.azure.com/nodata",
+                            "method": "POST",
+                            "body": {
+                              "message": "No rows copied"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ],
+
+                "ifFalseActivities": [
+
+                  {
+                    "name": "Set_Error_Message",
+                    "type": "SetVariable",
+                    "typeProperties": {
+                      "variableName": "ErrorMessage",
+                      "value": "Source file missing"
+                    }
+                  },
+
+                  {
+                    "name": "Send_File_Missing_Alert",
+                    "type": "WebActivity",
+                    "dependsOn": [
+                      {
+                        "activity": "Set_Error_Message",
+                        "dependencyConditions": ["Succeeded"]
+                      }
+                    ],
+                    "typeProperties": {
+                      "url": "https://prod.logicapp.azure.com/erroralert",
+                      "method": "POST",
+                      "body": {
+                        "message": "File missing in ADLS"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+
+      {
+        "name": "Until_Pipeline_Completion",
+        "type": "Until",
+        "dependsOn": [
+          {
+            "activity": "ForEach_Table_Processing",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+
+          "expression": {
+            "value": "@equals(variables('PipelineStatus'),'COMPLETED')",
+            "type": "Expression"
+          },
+
+          "activities": [
+
+            {
+              "name": "Wait_2_Minutes",
+              "type": "Wait",
+              "typeProperties": {
+                "waitTimeInSeconds": 120
+              }
+            },
+
+            {
+              "name": "Lookup_Execution_Status",
+              "type": "Lookup",
+              "dependsOn": [
+                {
+                  "activity": "Wait_2_Minutes",
+                  "dependencyConditions": ["Succeeded"]
+                }
+              ],
+              "typeProperties": {
+                "source": {
+                  "type": "AzureSqlSource",
+                  "sqlReaderQuery": "SELECT TOP 1 Status FROM ETL_Status"
+                },
+                "dataset": {
+                  "referenceName": "DS_SQL_Status",
+                  "type": "DatasetReference"
+                },
+                "firstRowOnly": true
+              }
+            },
+
+            {
+              "name": "Update_Pipeline_Status",
+              "type": "SetVariable",
+              "dependsOn": [
+                {
+                  "activity": "Lookup_Execution_Status",
+                  "dependencyConditions": ["Succeeded"]
+                }
+              ],
+              "typeProperties": {
+                "variableName": "PipelineStatus",
+                "value": {
+                  "value": "@activity('Lookup_Execution_Status').output.firstRow.Status",
+                  "type": "Expression"
+                }
+              }
+            }
+          ]
+        }
+      },
+
+      {
+        "name": "Execute_Final_Procedure",
+        "type": "SqlServerStoredProcedure",
+        "dependsOn": [
+          {
+            "activity": "Until_Pipeline_Completion",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "linkedServiceName": {
+          "referenceName": "LS_Azure_SQL",
+          "type": "LinkedServiceReference"
+        },
+        "typeProperties": {
+          "storedProcedureName": "sp_Finalize_Enterprise_ETL"
+        }
+      },
+
+      {
+        "name": "Trigger_Reporting_Pipeline",
+        "type": "ExecutePipeline",
+        "dependsOn": [
+          {
+            "activity": "Execute_Final_Procedure",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "pipeline": {
+            "referenceName": "PowerBI_Refresh_Pipeline",
+            "type": "PipelineReference"
+          },
+          "waitOnCompletion": true
+        }
+      },
+
+      {
+        "name": "Send_Success_Email",
+        "type": "WebActivity",
+        "dependsOn": [
+          {
+            "activity": "Trigger_Reporting_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "url": "https://prod.logicapp.azure.com/successmail",
+          "method": "POST",
+          "body": {
+            "message": "Enterprise ETL completed successfully"
+          }
+        }
+      },
+
+      {
+        "name": "Fail_Enterprise_Pipeline",
+        "type": "Fail",
+        "dependsOn": [
+          {
+            "activity": "ForEach_Table_Processing",
+            "dependencyConditions": ["Failed"]
+          }
+        ],
+        "typeProperties": {
+          "message": "Enterprise ETL Failed",
+          "errorCode": "500"
+        }
+      }
+    ]
+  }
 }
