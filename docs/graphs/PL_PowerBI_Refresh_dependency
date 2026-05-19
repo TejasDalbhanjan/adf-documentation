@@ -1,0 +1,6 @@
+digraph {
+	nodesep=0.7 rankdir=LR ranksep=1 splines=ortho
+	node [fontname=Helvetica shape=box style="rounded,filled"]
+	Refresh_PowerBI [label="Refresh_PowerBI
+[WebActivity]" fillcolor="#BDBDBD"]
+}

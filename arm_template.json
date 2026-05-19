@@ -1,0 +1,479 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+
+  "parameters": {
+
+    "factoryName": {
+      "type": "string",
+      "defaultValue": "adf-enterprise-prod"
+    },
+
+    "location": {
+      "type": "string",
+      "defaultValue": "East US"
+    },
+
+    "sqlServerName": {
+      "type": "string"
+    },
+
+    "databaseName": {
+      "type": "string"
+    },
+
+    "sqlUser": {
+      "type": "string"
+    },
+
+    "sqlPassword": {
+      "type": "secureString"
+    },
+
+    "storageAccountName": {
+      "type": "string"
+    },
+
+    "databricksWorkspaceUrl": {
+      "type": "string"
+    },
+
+    "databricksAccessToken": {
+      "type": "secureString"
+    }
+  },
+
+  "variables": {
+
+    "sqlLS": "LS_Azure_SQL",
+    "adlsLS": "LS_ADLS",
+    "databricksLS": "LS_Databricks",
+
+    "sqlDataset": "DS_SQL_Source",
+    "adlsDataset": "DS_ADLS_Target",
+
+    "etlPipeline": "PL_Enterprise_ETL",
+    "childPipeline": "PL_PowerBI_Refresh"
+
+  },
+
+  "resources": [
+
+    {
+      "name": "[parameters('factoryName')]",
+      "type": "Microsoft.DataFactory/factories",
+      "apiVersion": "2018-06-01",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {}
+    },
+
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('sqlLS'))]",
+      "type": "Microsoft.DataFactory/factories/linkedservices",
+      "apiVersion": "2018-06-01",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+
+      "properties": {
+
+        "type": "AzureSqlDatabase",
+
+        "typeProperties": {
+
+          "connectionString": {
+            "type": "SecureString",
+            "value": "[concat('Server=tcp:', parameters('sqlServerName'), '.database.windows.net;Initial Catalog=', parameters('databaseName'), ';User ID=', parameters('sqlUser'), ';Password=', parameters('sqlPassword'))]"
+          }
+        }
+      }
+    },
+
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('adlsLS'))]",
+      "type": "Microsoft.DataFactory/factories/linkedservices",
+      "apiVersion": "2018-06-01",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+
+      "properties": {
+
+        "type": "AzureBlobFS",
+
+        "typeProperties": {
+          "url": "[concat('https://', parameters('storageAccountName'), '.dfs.core.windows.net')]"
+        }
+      }
+    },
+
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('databricksLS'))]",
+      "type": "Microsoft.DataFactory/factories/linkedservices",
+      "apiVersion": "2018-06-01",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+
+      "properties": {
+
+        "type": "AzureDatabricks",
+
+        "typeProperties": {
+
+          "domain": "[parameters('databricksWorkspaceUrl')]",
+
+          "accessToken": {
+            "type": "SecureString",
+            "value": "[parameters('databricksAccessToken')]"
+          },
+
+          "existingClusterId": "cluster-001"
+        }
+      }
+    },
+
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('sqlDataset'))]",
+      "type": "Microsoft.DataFactory/factories/datasets",
+      "apiVersion": "2018-06-01",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories/linkedservices', parameters('factoryName'), variables('sqlLS'))]"
+      ],
+
+      "properties": {
+
+        "linkedServiceName": {
+          "referenceName": "[variables('sqlLS')]",
+          "type": "LinkedServiceReference"
+        },
+
+        "parameters": {
+          "TableName": {
+            "type": "String"
+          }
+        },
+
+        "type": "AzureSqlTable",
+
+        "schema": [],
+
+        "typeProperties": {
+
+          "tableName": {
+            "value": "@dataset().TableName",
+            "type": "Expression"
+          }
+        }
+      }
+    },
+
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('adlsDataset'))]",
+      "type": "Microsoft.DataFactory/factories/datasets",
+      "apiVersion": "2018-06-01",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories/linkedservices', parameters('factoryName'), variables('adlsLS'))]"
+      ],
+
+      "properties": {
+
+        "linkedServiceName": {
+          "referenceName": "[variables('adlsLS')]",
+          "type": "LinkedServiceReference"
+        },
+
+        "parameters": {
+          "FileName": {
+            "type": "String"
+          }
+        },
+
+        "type": "DelimitedText",
+
+        "typeProperties": {
+
+          "location": {
+            "type": "AzureBlobFSLocation",
+            "fileName": {
+              "value": "@dataset().FileName",
+              "type": "Expression"
+            },
+            "fileSystem": "raw"
+          },
+
+          "columnDelimiter": ",",
+          "firstRowAsHeader": true
+        }
+      }
+    },
+
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('childPipeline'))]",
+      "type": "Microsoft.DataFactory/factories/pipelines",
+      "apiVersion": "2018-06-01",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+
+      "properties": {
+
+        "activities": [
+
+          {
+            "name": "Refresh_PowerBI",
+            "type": "WebActivity",
+
+            "typeProperties": {
+
+              "url": "https://api.powerbi.com/refresh",
+              "method": "POST"
+            }
+          }
+        ]
+      }
+    },
+
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('etlPipeline'))]",
+      "type": "Microsoft.DataFactory/factories/pipelines",
+      "apiVersion": "2018-06-01",
+
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories/datasets', parameters('factoryName'), variables('sqlDataset'))]",
+        "[resourceId('Microsoft.DataFactory/factories/datasets', parameters('factoryName'), variables('adlsDataset'))]"
+      ],
+
+      "properties": {
+
+        "parameters": {
+
+          "LoadType": {
+            "type": "String",
+            "defaultValue": "Incremental"
+          }
+        },
+
+        "variables": {
+
+          "CurrentTable": {
+            "type": "String"
+          },
+
+          "RowsCopied": {
+            "type": "Integer"
+          }
+        },
+
+        "activities": [
+
+          {
+            "name": "Lookup_Config",
+            "type": "Lookup",
+
+            "typeProperties": {
+
+              "source": {
+                "type": "AzureSqlSource",
+                "sqlReaderQuery": "SELECT * FROM ETL_Config WHERE IsActive = 1"
+              },
+
+              "dataset": {
+                "referenceName": "DS_SQL_Source",
+                "type": "DatasetReference",
+
+                "parameters": {
+                  "TableName": "ETL_Config"
+                }
+              },
+
+              "firstRowOnly": false
+            }
+          },
+
+          {
+            "name": "ForEach_Table_Load",
+            "type": "ForEach",
+
+            "dependsOn": [
+              {
+                "activity": "Lookup_Config",
+                "dependencyConditions": ["Succeeded"]
+              }
+            ],
+
+            "typeProperties": {
+
+              "items": {
+                "value": "@activity('Lookup_Config').output.value",
+                "type": "Expression"
+              },
+
+              "isSequential": false,
+              "batchCount": 5,
+
+              "activities": [
+
+                {
+                  "name": "Copy_SQL_To_ADLS",
+                  "type": "Copy",
+
+                  "inputs": [
+                    {
+                      "referenceName": "DS_SQL_Source",
+                      "type": "DatasetReference",
+
+                      "parameters": {
+                        "TableName": {
+                          "value": "@item().TableName",
+                          "type": "Expression"
+                        }
+                      }
+                    }
+                  ],
+
+                  "outputs": [
+                    {
+                      "referenceName": "DS_ADLS_Target",
+                      "type": "DatasetReference",
+
+                      "parameters": {
+                        "FileName": {
+                          "value": "@concat(item().TableName,'.csv')",
+                          "type": "Expression"
+                        }
+                      }
+                    }
+                  ],
+
+                  "typeProperties": {
+
+                    "source": {
+                      "type": "SqlSource"
+                    },
+
+                    "sink": {
+                      "type": "DelimitedTextSink"
+                    }
+                  }
+                },
+
+                {
+                  "name": "Execute_Databricks_Notebook",
+                  "type": "DatabricksNotebook",
+
+                  "dependsOn": [
+                    {
+                      "activity": "Copy_SQL_To_ADLS",
+                      "dependencyConditions": ["Succeeded"]
+                    }
+                  ],
+
+                  "linkedServiceName": {
+                    "referenceName": "LS_Databricks",
+                    "type": "LinkedServiceReference"
+                  },
+
+                  "typeProperties": {
+
+                    "notebookPath": "/Shared/EnterpriseNotebook",
+
+                    "baseParameters": {
+
+                      "TableName": {
+                        "value": "@item().TableName",
+                        "type": "Expression"
+                      }
+                    }
+                  }
+                },
+
+                {
+                  "name": "If_Row_Count_Valid",
+                  "type": "IfCondition",
+
+                  "dependsOn": [
+                    {
+                      "activity": "Copy_SQL_To_ADLS",
+                      "dependencyConditions": ["Succeeded"]
+                    }
+                  ],
+
+                  "typeProperties": {
+
+                    "expression": {
+                      "value": "@greater(activity('Copy_SQL_To_ADLS').output.rowsCopied,0)",
+                      "type": "Expression"
+                    },
+
+                    "ifTrueActivities": [
+
+                      {
+                        "name": "Execute_Child_Pipeline",
+                        "type": "ExecutePipeline",
+
+                        "typeProperties": {
+
+                          "pipeline": {
+                            "referenceName": "PL_PowerBI_Refresh",
+                            "type": "PipelineReference"
+                          },
+
+                          "waitOnCompletion": true
+                        }
+                      }
+                    ],
+
+                    "ifFalseActivities": [
+
+                      {
+                        "name": "Fail_No_Data",
+                        "type": "Fail",
+
+                        "typeProperties": {
+                          "message": "No rows copied",
+                          "errorCode": "400"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+
+          {
+            "name": "Send_Success_Email",
+            "type": "WebActivity",
+
+            "dependsOn": [
+              {
+                "activity": "ForEach_Table_Load",
+                "dependencyConditions": ["Succeeded"]
+              }
+            ],
+
+            "typeProperties": {
+
+              "url": "https://logicapp.azure.com/success",
+              "method": "POST",
+
+              "body": {
+                "message": "ADF Enterprise ETL Completed"
+              }
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
