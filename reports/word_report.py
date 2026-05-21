@@ -1,4 +1,4 @@
-import os
+import io
 from docx import Document
 from docx.shared import Pt
 
@@ -67,10 +67,6 @@ def create_word_report(
     optimization,
     impact_analysis
 ):
-    os.makedirs("docs/word", exist_ok=True)
-    safe_name = pipeline_name.replace("/", "_").replace("\\", "_").replace(" ", "_")
-    word_path = f"docs/word/{safe_name}_documentation.docx"
-
     document = Document()
 
     # -----------------------------------
@@ -175,5 +171,9 @@ ADF pipeline analysis including:
     else:
         document.add_paragraph("No optimization findings.")
 
-    document.save(word_path)
-    return word_path
+    # NEW: Save to a byte stream instead of a file on disk
+    buffer = io.BytesIO()
+    document.save(buffer)
+    buffer.seek(0)
+    
+    return buffer

@@ -1,4 +1,4 @@
-import os
+import io
 import pandas as pd
 
 from utils.helpers import (
@@ -6,241 +6,81 @@ from utils.helpers import (
     safe_dict
 )
 
-
 def create_excel_report(
-
     pipeline_name,
-
     activities,
-
     lineage,
-
     optimization,
-
     impact_analysis
 ):
+    # 1. Create an in-memory buffer instead of a local file path
+    buffer = io.BytesIO()
 
-    os.makedirs(
-
-        "docs/excel",
-
-        exist_ok=True
-    )
-
-    output_path = (
-
-        f"docs/excel/"
-        f"{pipeline_name}_enterprise_report.xlsx"
-    )
-
-    with pd.ExcelWriter(
-
-        output_path,
-
-        engine="xlsxwriter"
-    ) as writer:
+    # 2. Pass the buffer directly to ExcelWriter
+    with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
 
         # -----------------------------------
         # Summary
         # -----------------------------------
-
         summary_df = pd.DataFrame([{
-
-            "Pipeline Name":
-                pipeline_name,
-
-            "Total Activities":
-                len(activities),
-
-            "Dependencies":
-                sum(
-                    len(a["depends_on"])
-                    for a in activities
-                ),
-
-            "Datasets":
-                len(set(
-
-                    dataset
-
-                    for activity in activities
-
-                    for dataset in activity[
-                        "datasets"
-                    ]
-                ))
+            "Pipeline Name": pipeline_name,
+            "Total Activities": len(activities),
+            "Dependencies": sum(len(a["depends_on"]) for a in activities),
+            "Datasets": len(set(
+                dataset
+                for activity in activities
+                for dataset in activity["datasets"]
+            ))
         }])
 
-        summary_df.to_excel(
-
-            writer,
-
-            sheet_name="Summary",
-
-            index=False
-        )
+        summary_df.to_excel(writer, sheet_name="Summary", index=False)
 
         # -----------------------------------
         # Activities
         # -----------------------------------
-
         activity_rows = []
-
         for activity in activities:
-
             activity_rows.append({
-
-                "Activity":
-                    activity["name"],
-
-                "Type":
-                    activity["type"],
-
-                "Parent":
-                    activity["parent"]
-                    if activity["parent"]
-                    else "NA",
-
-                "Depends On":
-                    safe_join([
-                        dep["activity"]
-                        for dep in activity[
-                            "depends_on"
-                        ]
-                    ]),
-
-                "Datasets":
-                    safe_join(
-                        activity["datasets"]
-                    ),
-
-                "Linked Services":
-                    safe_join(
-                        activity[
-                            "linked_services"
-                        ]
-                    ),
-
-                "Dataflows":
-                    safe_join(
-                        activity[
-                            "dataflows"
-                        ]
-                    ),
-
-                "Pipelines":
-                    safe_join(
-                        activity[
-                            "pipelines"
-                        ]
-                    ),
-
-                "Parameters":
-                    safe_dict(
-                        activity[
-                            "parameters"
-                        ]
-                    ),
-
-                "Retry":
-                    activity[
-                        "retry_policy"
-                    ]["retry"],
-
-                "Timeout":
-                    activity[
-                        "retry_policy"
-                    ]["timeout"],
-
-                "Notebook Path":
-                    activity[
-                        "notebook_path"
-                    ],
-
-                "Stored Procedure":
-                    activity[
-                        "stored_procedure"
-                    ],
-
-                "Expressions":
-                    safe_join(
-                        activity[
-                            "expressions"
-                        ]
-                    ),
-
-                "Security Issues":
-                    safe_join(
-                        activity[
-                            "security_issues"
-                        ]
-                    )
+                "Activity": activity["name"],
+                "Type": activity["type"],
+                "Parent": activity["parent"] if activity["parent"] else "NA",
+                "Depends On": safe_join([dep["activity"] for dep in activity["depends_on"]]),
+                "Datasets": safe_join(activity["datasets"]),
+                "Linked Services": safe_join(activity["linked_services"]),
+                "Dataflows": safe_join(activity["dataflows"]),
+                "Pipelines": safe_join(activity["pipelines"]),
+                "Parameters": safe_dict(activity["parameters"]),
+                "Retry": activity["retry_policy"]["retry"],
+                "Timeout": activity["retry_policy"]["timeout"],
+                "Notebook Path": activity["notebook_path"],
+                "Stored Procedure": activity["stored_procedure"],
+                "Expressions": safe_join(activity["expressions"]),
+                "Security Issues": safe_join(activity["security_issues"])
             })
 
-        activities_df = pd.DataFrame(
-            activity_rows
-        )
-
-        activities_df.to_excel(
-
-            writer,
-
-            sheet_name="Activities",
-
-            index=False
-        )
+        activities_df = pd.DataFrame(activity_rows)
+        activities_df.to_excel(writer, sheet_name="Activities", index=False)
 
         # -----------------------------------
         # Lineage
         # -----------------------------------
-
-        lineage_df = pd.DataFrame(
-            lineage
-        )
-
-        lineage_df.to_excel(
-
-            writer,
-
-            sheet_name="Lineage",
-
-            index=False
-        )
+        lineage_df = pd.DataFrame(lineage)
+        lineage_df.to_excel(writer, sheet_name="Lineage", index=False)
 
         # -----------------------------------
         # Impact Analysis
         # -----------------------------------
-
-        impact_df = pd.DataFrame(
-            impact_analysis
-        )
-
-        impact_df.to_excel(
-
-            writer,
-
-            sheet_name="ImpactAnalysis",
-
-            index=False
-        )
+        impact_df = pd.DataFrame(impact_analysis)
+        impact_df.to_excel(writer, sheet_name="ImpactAnalysis", index=False)
 
         # -----------------------------------
         # Optimization
         # -----------------------------------
+        optimization_df = pd.DataFrame({"Recommendations": optimization})
+        optimization_df.to_excel(writer, sheet_name="Optimization", index=False)
 
-        optimization_df = pd.DataFrame({
-
-            "Recommendations":
-                optimization
-        })
-
-        optimization_df.to_excel(
-
-            writer,
-
-            sheet_name="Optimization",
-
-            index=False
-        )
-
-    return output_path
+    # 3. Reset the buffer pointer to the beginning so Streamlit can read it
+    buffer.seek(0)
+    
+    # Return the raw memory buffer, NOT a file path
+    return buffer
