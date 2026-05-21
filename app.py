@@ -11,6 +11,7 @@ from reports.word_report import (
 from parser.pipeline_parser import (
     extract_pipeline_name,
     extract_pipeline_parameters,
+    extract_pipeline_variables,
     extract_activities
 )
 from parser.arm_template_parser import (
@@ -119,7 +120,8 @@ if uploaded_file:
         # -----------------------------------
 
         pipeline_name = extract_pipeline_name(
-            pipeline_data
+            pipeline_data,
+            full_data=data
         )
 
         st.header(
@@ -130,34 +132,37 @@ if uploaded_file:
         # Pipeline Parameters
         # -----------------------------------
 
-        pipeline_parameters = (
-            extract_pipeline_parameters(
-                pipeline_data
-            )
-        )
+        # -----------------------------------
+        # Pipeline Parameters & Variables
+        # -----------------------------------
 
-        st.subheader(
-            "Pipeline Parameters"
-        )
+        colA, colB = st.columns(2)
 
-        if pipeline_parameters:
+        with colA:
+            st.subheader("Pipeline Parameters")
+            pipeline_parameters = extract_pipeline_parameters(pipeline_data)
+            
+            if pipeline_parameters:
+                st.json(pipeline_parameters)
+            else:
+                st.info("No Parameters Found")
 
-            st.json(
-                pipeline_parameters
-            )
-
-        else:
-
-            st.info(
-                "No Parameters Found"
-            )
+        with colB:
+            st.subheader("Pipeline Variables")
+            pipeline_variables = extract_pipeline_variables(pipeline_data)
+            
+            if pipeline_variables:
+                st.json(pipeline_variables)
+            else:
+                st.info("No Variables Found")
 
         # -----------------------------------
         # Extract Activities
         # -----------------------------------
 
         activities = extract_activities(
-            pipeline_data
+            pipeline_data,
+            full_data=data
         )
 
         # -----------------------------------
@@ -274,7 +279,13 @@ if uploaded_file:
         rows = []
 
         for activity in activities:
-
+            depends_formatted = []
+            for dep in activity["depends_on"]:
+                conds = dep.get("conditions", [])
+                if conds:
+                    depends_formatted.append(f"{dep['activity']} ({', '.join(conds)})")
+                else:
+                    depends_formatted.append(dep['activity'])
             rows.append({
 
                 "Activity Name":
@@ -289,14 +300,7 @@ if uploaded_file:
                     else "NA",
 
                 "Depends On":
-                    ",".join([
-                        dep["activity"]
-                        for dep in activity[
-                            "depends_on"
-                        ]
-                    ])
-                    if activity["depends_on"]
-                    else "NA",
+                    ",\n".join(depends_formatted) if depends_formatted else "NA",
 
                 "Datasets":
                     ",".join(
@@ -689,15 +693,12 @@ if uploaded_file:
             impact_analysis
         )
         word_path = create_word_report(
-
         pipeline_name,
-
+        pipeline_parameters,  # <--- Add this
+        pipeline_variables,
         activities,
-
         lineage,
-
         optimization,
-
         impact_analysis
     )
         

@@ -30,7 +30,7 @@ def create_excel_report(
     output_path = (
 
         f"docs/excel/"
-        f"{safe_pipeline_name}_enterprise_report.xlsx"
+        f"{pipeline_name}_enterprise_report.xlsx"
     )
 
     with pd.ExcelWriter(

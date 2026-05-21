@@ -1,0 +1,120 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "factoryName": {
+      "type": "string",
+      "defaultValue": "adf-global-analytics"
+    },
+    "keyVaultUrl": {
+      "type": "string",
+      "defaultValue": "https://kv-global-analytics.vault.azure.net/"
+    }
+  },
+  "variables": {
+    "kvLinkedService": "LS_AzureKeyVault",
+    "masterPipeline": "PL_Master_Orchestrator",
+    "workerPipeline": "PL_Worker_Ingestion"
+  },
+  "resources": [
+    {
+      "name": "[parameters('factoryName')]",
+      "type": "Microsoft.DataFactory/factories",
+      "apiVersion": "2018-06-01",
+      "location": "Central India",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {}
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('kvLinkedService'))]",
+      "type": "Microsoft.DataFactory/factories/linkedservices",
+      "apiVersion": "2018-06-01",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+      "properties": {
+        "type": "AzureKeyVault",
+        "typeProperties": {
+          "baseUrl": "[parameters('keyVaultUrl')]"
+        }
+      }
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('workerPipeline'))]",
+      "type": "Microsoft.DataFactory/factories/pipelines",
+      "apiVersion": "2018-06-01",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories', parameters('factoryName'))]"
+      ],
+      "properties": {
+        "parameters": {
+          "BatchId": {
+            "type": "String"
+          }
+        },
+        "activities": [
+          {
+            "name": "Wait_For_Resources",
+            "type": "Wait",
+            "typeProperties": {
+              "waitTimeInSeconds": 30
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[concat(parameters('factoryName'), '/', variables('masterPipeline'))]",
+      "type": "Microsoft.DataFactory/factories/pipelines",
+      "apiVersion": "2018-06-01",
+      "dependsOn": [
+        "[resourceId('Microsoft.DataFactory/factories/pipelines', parameters('factoryName'), variables('workerPipeline'))]"
+      ],
+      "properties": {
+        "activities": [
+          {
+            "name": "Set_Batch_ID",
+            "type": "SetVariable",
+            "typeProperties": {
+              "variableName": "GlobalBatchId",
+              "value": {
+                "value": "@guid()",
+                "type": "Expression"
+              }
+            }
+          },
+          {
+            "name": "Invoke_Worker",
+            "type": "ExecutePipeline",
+            "dependsOn": [
+              {
+                "activity": "Set_Batch_ID",
+                "dependencyConditions": ["Succeeded"]
+              }
+            ],
+            "typeProperties": {
+              "pipeline": {
+                "referenceName": "[variables('workerPipeline')]",
+                "type": "PipelineReference"
+              },
+              "waitOnCompletion": true,
+              "parameters": {
+                "BatchId": {
+                  "value": "@variables('GlobalBatchId')",
+                  "type": "Expression"
+                }
+              }
+            }
+          }
+        ],
+        "variables": {
+          "GlobalBatchId": {
+            "type": "String"
+          }
+        }
+      }
+    }
+  ]
+}

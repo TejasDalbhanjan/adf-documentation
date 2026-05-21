@@ -1,713 +1,264 @@
-from governance.retry_checker import (
-    extract_retry_policy
-)
+import re
+from governance.retry_checker import extract_retry_policy
+from governance.security_checker import detect_security_issues
+from parser.expression_parser import extract_dynamic_expressions
 
-from governance.security_checker import (
-    detect_security_issues
-)
+# -----------------------------------
+# ARM Expression Resolver
+# -----------------------------------
+def resolve_arm_expression(expr, full_data):
+    """
+    Evaluates ARM template variables and parameters to extract the true 
+    underlying ADF resource name (e.g., dataset or linked service).
+    """
+    if not isinstance(expr, str) or not expr.startswith("["):
+        return expr
 
-from parser.expression_parser import (
-    extract_dynamic_expressions
-)
+    resolved = expr
+
+    if full_data:
+        # 1. Resolve variables: variables('varName')
+        var_matches = re.finditer(r"variables\('([^']+)'\)", resolved)
+        for match in var_matches:
+            var_name = match.group(1)
+            var_val = full_data.get("variables", {}).get(var_name, var_name)
+            resolved = resolved.replace(match.group(0), str(var_val))
+
+        # 2. Resolve parameters: parameters('paramName')
+        param_matches = re.finditer(r"parameters\('([^']+)'\)", resolved)
+        for match in param_matches:
+            param_name = match.group(1)
+            param_val = full_data.get("parameters", {}).get(param_name, {}).get("defaultValue", param_name)
+            resolved = resolved.replace(match.group(0), str(param_val))
+
+    # 3. Handle concat(...) flattening
+    if "concat(" in resolved:
+        inner = resolved.replace("[concat(", "").replace(")]", "").replace("'", "").replace(" ", "")
+        resolved = "".join(inner.split(","))
+
+    # 4. Clean up any remaining ARM brackets/quotes
+    resolved = resolved.replace("[", "").replace("]", "").replace("'", "")
+
+    # 5. Extract actual resource name (ADF ARM names are 'factoryName/resourceName')
+    return resolved.split("/")[-1]
+
 
 # -----------------------------------
 # Build Dataset -> Linked Service Map
 # -----------------------------------
 def build_dataset_linked_service_map(data):
-
     dataset_map = {}
-
     resources = data.get("resources", [])
 
     for resource in resources:
-
         resource_type = resource.get("type", "").lower()
 
-        # only datasets
         if "datasets" in resource_type:
-
-            # full ARM name: factory/dataset
-            full_name = resource.get("name", "")
-
-            dataset_name = full_name.split("/")[-1]
+            # Resolve ARM dataset name
+            raw_name = resource.get("name", "")
+            dataset_name = resolve_arm_expression(raw_name, data)
 
             properties = resource.get("properties", {})
-
             linked_service = properties.get("linkedServiceName", {})
 
+            # Resolve ARM Linked Service name
             if isinstance(linked_service, dict):
-                linked_service = linked_service.get("referenceName", "NA")
+                raw_ls = linked_service.get("referenceName", "NA")
+                ls_name = resolve_arm_expression(raw_ls, data)
+            else:
+                ls_name = resolve_arm_expression(linked_service, data)
 
-            dataset_map[dataset_name] = linked_service
+            dataset_map[dataset_name] = ls_name
 
     return dataset_map
 
 # -----------------------------------
-# Pipeline Name
+# Pipeline Name, Parameters, Variables
 # -----------------------------------
+def extract_pipeline_name(pipeline_data, full_data=None):
+    raw_name = pipeline_data.get("name", "Unknown Pipeline")
+    source_data = full_data if full_data else pipeline_data
+    resolved_name = resolve_arm_expression(raw_name, source_data)
+    return resolved_name
 
-def extract_pipeline_name(
-    data
-):
+def extract_pipeline_parameters(data):
+    return data.get("properties", {}).get("parameters", {})
 
-    return data.get(
-        "name",
-        "Unknown Pipeline"
-    )
-
-
-# -----------------------------------
-# Pipeline Parameters
-# -----------------------------------
-
-def extract_pipeline_parameters(
-    data
-):
-
-    return (
-        data.get(
-            "properties",
-            {}
-        ).get(
-            "parameters",
-            {}
-        )
-    )
-
+def extract_pipeline_variables(data):
+    return data.get("properties", {}).get("variables", {})
 
 # -----------------------------------
 # Reference Extraction
 # -----------------------------------
-
-def classify_references(
-    obj
-):
-
+def classify_references(obj):
     classified = {
-
         "datasets": [],
         "linked_services": [],
         "dataflows": [],
         "pipelines": []
     }
+    recursive_reference_scan(obj, classified)
 
-    recursive_reference_scan(
-
-        obj,
-
-        classified
-    )
-
-    # -----------------------------------
     # Remove Duplicates
-    # -----------------------------------
-
     for key in classified:
-
-        classified[key] = list(
-            set(
-                classified[key]
-            )
-        )
-
+        classified[key] = list(set(classified[key]))
     return classified
 
-
-def recursive_reference_scan(
-    obj,
-    classified
-):
-
-    # -----------------------------------
-    # Dictionary
-    # -----------------------------------
-
+def recursive_reference_scan(obj, classified):
     if isinstance(obj, dict):
+        reference_name = obj.get("referenceName")
+        reference_type = obj.get("type")
 
-        reference_name = obj.get(
-            "referenceName"
-        )
-
-        reference_type = obj.get(
-            "type"
-        )
-
-        # -----------------------------------
-        # Dataset
-        # -----------------------------------
-
-        if (
-            reference_name
-            and reference_type == "DatasetReference"
-        ):
-
-            classified[
-                "datasets"
-            ].append(
-                reference_name
-            )
-
-        # -----------------------------------
-        # Linked Service
-        # -----------------------------------
-
-        elif (
-            reference_name
-            and reference_type == "LinkedServiceReference"
-        ):
-
-            classified[
-                "linked_services"
-            ].append(
-                reference_name
-            )
-
-        # -----------------------------------
-        # Data Flow
-        # -----------------------------------
-
-        elif (
-            reference_name
-            and reference_type == "DataFlowReference"
-        ):
-
-            classified[
-                "dataflows"
-            ].append(
-                reference_name
-            )
-
-        # -----------------------------------
-        # Pipeline
-        # -----------------------------------
-
-        elif (
-            reference_name
-            and reference_type == "PipelineReference"
-        ):
-
-            classified[
-                "pipelines"
-            ].append(
-                reference_name
-            )
-
-        # -----------------------------------
-        # Recursive Scan
-        # -----------------------------------
+        if reference_name and reference_type == "DatasetReference":
+            classified["datasets"].append(reference_name)
+        elif reference_name and reference_type == "LinkedServiceReference":
+            classified["linked_services"].append(reference_name)
+        elif reference_name and reference_type == "DataFlowReference":
+            classified["dataflows"].append(reference_name)
+        elif reference_name and reference_type == "PipelineReference":
+            classified["pipelines"].append(reference_name)
 
         for value in obj.values():
-
-            recursive_reference_scan(
-
-                value,
-
-                classified
-            )
-
-    # -----------------------------------
-    # List
-    # -----------------------------------
+            recursive_reference_scan(value, classified)
 
     elif isinstance(obj, list):
-
         for item in obj:
-
-            recursive_reference_scan(
-
-                item,
-
-                classified
-            )
-
+            recursive_reference_scan(item, classified)
 
 # -----------------------------------
-# Activity Parameters
+# Activity Parameters (SMART CAPTURE)
 # -----------------------------------
-
-def extract_activity_parameters(
-    activity
-):
-
+def extract_activity_parameters(activity):
+    """
+    Dynamically captures all activity properties (like queries, URLs, batch counts)
+    while ignoring nested activities to prevent massive messy JSON blocks.
+    """
     parameters = {}
-
-    type_properties = activity.get(
-        "typeProperties",
-        {}
-    )
-
-    parameter_keys = [
-
-        "parameters",
-
-        "baseParameters",
-
-        "storedProcedureParameters",
-
-        "dataFlowParameters"
+    type_properties = activity.get("typeProperties", {})
+    
+    # Exclude nested activity arrays so they don't bloat the parameters column
+    exclude_keys = [
+        "activities", 
+        "ifTrueActivities", 
+        "ifFalseActivities", 
+        "defaultActivities", 
+        "cases"
     ]
 
-    for key in parameter_keys:
-
-        value = type_properties.get(
-            key
-        )
-
-        if value:
-
+    for key, value in type_properties.items():
+        if key not in exclude_keys:
             parameters[key] = value
 
     return parameters
 
-
 # -----------------------------------
 # Activities Extraction
 # -----------------------------------
-
-def extract_activities(
-    pipeline_data,
-    full_data=None
-):
-
+def extract_activities(pipeline_data, full_data=None):
     activities = []
-
-    # -----------------------------------
-    # ARM Template Support
-    # -----------------------------------
-
-    source_data = (
-        full_data
-        if full_data
-        else pipeline_data
-    )
-
-    dataset_ls_map = (
-        build_dataset_linked_service_map(
-            source_data
-        )
-    )
-
-    root_activities = (
-        pipeline_data.get(
-            "properties",
-            {}
-        ).get(
-            "activities",
-            []
-        )
-    )
+    source_data = full_data if full_data else pipeline_data
+    
+    dataset_ls_map = build_dataset_linked_service_map(source_data)
+    root_activities = pipeline_data.get("properties", {}).get("activities", [])
 
     parse_nested_activities(
-
         root_activities,
-
         activities,
-
         dataset_ls_map,
-
-        parent=None
+        parent=None,
+        full_data=source_data
     )
-    activities = propagate_child_references(
-        activities
-    )
+    activities = propagate_child_references(activities)
     return activities
-
 
 # -----------------------------------
 # Nested Activity Parsing
 # -----------------------------------
-
-def parse_nested_activities(
-
-    activity_list,
-
-    activities,
-
-    dataset_ls_map,
-
-    parent=None
-):
-
+def parse_nested_activities(activity_list, activities, dataset_ls_map, parent=None, full_data=None):
     for activity in activity_list:
+        activity_name = activity.get("name", "Unknown")
+        activity_type = activity.get("type", "Unknown")
 
-        activity_name = activity.get(
-            "name",
-            "Unknown"
-        )
-
-        activity_type = activity.get(
-            "type",
-            "Unknown"
-        )
-        direct_ls = activity.get("linkedServiceName", {}).get("referenceName")
-
-        # -----------------------------------
         # dependsOn
-        # -----------------------------------
-
         depends_on = []
-
-        raw_dependencies = activity.get(
-            "dependsOn",
-            []
-        )
-
-        for dep in raw_dependencies:
-
+        for dep in activity.get("dependsOn", []):
             depends_on.append({
-
-                "activity":
-                    dep.get(
-                        "activity"
-                    ),
-
-                "conditions":
-                    dep.get(
-                        "dependencyConditions",
-                        []
-                    )
+                "activity": dep.get("activity"),
+                "conditions": dep.get("dependencyConditions", [])
             })
 
-        # -----------------------------------
         # Reference Classification
-        # -----------------------------------
+        references = classify_references(activity)
 
-        references = classify_references(
-            activity
-        )
+        # Resolve all extracted references through ARM evaluator
+        for key in references:
+            references[key] = list(set([
+                resolve_arm_expression(ref, full_data) for ref in references[key]
+            ]))
 
-        # -----------------------------------
         # Dataset -> Linked Service Mapping
-        # -----------------------------------
-
         derived_linked_services = []
 
-        # activity-level linked service (IMPORTANT FIX)
-        direct_ls = activity.get(
-            "linkedServiceName",
-            {}
-        ).get("referenceName")
-
+        direct_ls = activity.get("linkedServiceName", {}).get("referenceName")
         if direct_ls:
-            derived_linked_services.append(direct_ls)
+            derived_linked_services.append(resolve_arm_expression(direct_ls, full_data))
 
-        # dataset -> linked service mapping
         for dataset in references["datasets"]:
             ls = dataset_ls_map.get(dataset)
             if ls and ls != "NA":
                 derived_linked_services.append(ls)
 
-        # merge both
         references["linked_services"].extend(derived_linked_services)
-
-        # remove duplicates
         references["linked_services"] = list(set(references["linked_services"]))
 
-        # references[
-        #     "linked_services"
-        # ] = list(
-        #     set(
-        #         references[
-        #             "linked_services"
-        #         ]
-        #     )
-        # )
+        parameters = extract_activity_parameters(activity)
 
-        # -----------------------------------
-        # Parameters
-        # -----------------------------------
-
-        parameters = (
-            extract_activity_parameters(
-                activity
-            )
-        )
-
-        # -----------------------------------
         # Append Activity
-        # -----------------------------------
-
         activities.append({
-
-            "name":
-                activity_name,
-
-            "type":
-                activity_type,
-
-            "parent":
-                parent,
-
-            "depends_on":
-                depends_on,
-
-            "datasets":
-                references[
-                    "datasets"
-                ],
-
-            "linked_services":
-                references[
-                    "linked_services"
-                ],
-
-            "dataflows":
-                references[
-                    "dataflows"
-                ],
-
-            "pipelines":
-                references[
-                    "pipelines"
-                ],
-
-            "parameters":
-                parameters,
-
-            "retry_policy":
-                extract_retry_policy(
-                    activity
-                ),
-
-            "expressions":
-                extract_dynamic_expressions(
-                    activity
-                ),
-
-            "security_issues":
-                detect_security_issues(
-                    activity
-                ),
-
-            "notebook_path":
-                activity.get(
-                    "typeProperties",
-                    {}
-                ).get(
-                    "notebookPath",
-                    "NA"
-                ),
-
-            "stored_procedure":
-                activity.get(
-                    "typeProperties",
-                    {}
-                ).get(
-                    "storedProcedureName",
-                    "NA"
-                )
+            "name": activity_name,
+            "type": activity_type,
+            "parent": parent,
+            "depends_on": depends_on,
+            "datasets": references["datasets"],
+            "linked_services": references["linked_services"],
+            "dataflows": references["dataflows"],
+            "pipelines": references["pipelines"],
+            "parameters": parameters,
+            "retry_policy": extract_retry_policy(activity),
+            "expressions": extract_dynamic_expressions(activity),
+            "security_issues": detect_security_issues(activity),
+            "notebook_path": activity.get("typeProperties", {}).get("notebookPath", "NA"),
+            "stored_procedure": activity.get("typeProperties", {}).get("storedProcedureName", "NA")
         })
 
-        # -----------------------------------
-        # Generic Nested Activities
-        # -----------------------------------
+        # Recursive Traversal
+        type_props = activity.get("typeProperties", {})
+        
+        for key in ["activities", "ifTrueActivities", "ifFalseActivities", "defaultActivities"]:
+            nested = type_props.get(key, [])
+            if nested:
+                parse_nested_activities(nested, activities, dataset_ls_map, parent=activity_name, full_data=full_data)
 
-        nested_activities = (
-            activity.get(
-                "typeProperties",
-                {}
-            ).get(
-                "activities",
-                []
-            )
-        )
-
-        if nested_activities:
-
-            parse_nested_activities(
-
-                nested_activities,
-
-                activities,
-
-                dataset_ls_map,
-
-                parent=activity_name
-            )
-
-        # -----------------------------------
-        # If True Activities
-        # -----------------------------------
-
-        if_true = (
-            activity.get(
-                "typeProperties",
-                {}
-            ).get(
-                "ifTrueActivities",
-                []
-            )
-        )
-
-        if if_true:
-
-            parse_nested_activities(
-
-                if_true,
-
-                activities,
-
-                dataset_ls_map,
-
-                parent=activity_name
-            )
-
-        # -----------------------------------
-        # If False Activities
-        # -----------------------------------
-
-        if_false = (
-            activity.get(
-                "typeProperties",
-                {}
-            ).get(
-                "ifFalseActivities",
-                []
-            )
-        )
-
-        if if_false:
-
-            parse_nested_activities(
-
-                if_false,
-
-                activities,
-
-                dataset_ls_map,
-
-                parent=activity_name
-            )
-
-        # -----------------------------------
         # Switch Cases
-        # -----------------------------------
+        for case in type_props.get("cases", []):
+            parse_nested_activities(case.get("activities", []), activities, dataset_ls_map, parent=activity_name, full_data=full_data)
 
-        cases = (
-            activity.get(
-                "typeProperties",
-                {}
-            ).get(
-                "cases",
-                []
-            )
-        )
-
-        for case in cases:
-
-            parse_nested_activities(
-
-                case.get(
-                    "activities",
-                    []
-                ),
-
-                activities,
-
-                dataset_ls_map,
-
-                parent=activity_name
-            )
-
-        # -----------------------------------
-        # Default Activities
-        # -----------------------------------
-
-        default_activities = (
-            activity.get(
-                "typeProperties",
-                {}
-            ).get(
-                "defaultActivities",
-                []
-            )
-        )
-
-        if default_activities:
-
-            parse_nested_activities(
-
-                default_activities,
-
-                activities,
-
-                dataset_ls_map,
-
-                parent=activity_name
-            )
-            
-def propagate_child_references(
-    activities
-):
-
-    activity_lookup = {
-
-        activity["name"]: activity
-
-        for activity in activities
-    }
-
-    # reverse traversal
+# -----------------------------------
+# Propagate References
+# -----------------------------------
+def propagate_child_references(activities):
+    activity_lookup = {activity["name"]: activity for activity in activities}
 
     for activity in reversed(activities):
-
-        parent_name = activity.get(
-            "parent"
-        )
-
+        parent_name = activity.get("parent")
         if not parent_name:
             continue
 
-        parent = activity_lookup.get(
-            parent_name
-        )
-
+        parent = activity_lookup.get(parent_name)
         if not parent:
             continue
 
-        # merge datasets
-
-        parent["datasets"] = list(
-            set(
-                parent["datasets"]
-                + activity["datasets"]
-            )
-        )
-
-        # merge linked services
-
-        parent["linked_services"] = list(
-            set(
-                parent["linked_services"]
-                + activity["linked_services"]
-            )
-        )
-
-        # merge pipelines
-
-        parent["pipelines"] = list(
-            set(
-                parent["pipelines"]
-                + activity["pipelines"]
-            )
-        )
-
-        # merge dataflows
-
-        parent["dataflows"] = list(
-            set(
-                parent["dataflows"]
-                + activity["dataflows"]
-            )
-        )
-
-        # merge expressions
-
-        parent["expressions"] = list(
-            set(
-                parent["expressions"]
-                + activity["expressions"]
-            )
-        )
+        for key in ["datasets", "linked_services", "pipelines", "dataflows", "expressions"]:
+            parent[key] = list(set(parent[key] + activity[key]))
 
     return activities

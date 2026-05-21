@@ -1,0 +1,92 @@
+{
+  "name": "PL_Route_By_Region",
+  "properties": {
+    "parameters": {
+      "RegionCode": {
+        "type": "String",
+        "defaultValue": "US"
+      }
+    },
+    "variables": {
+      "ProcessedRegions": {
+        "type": "Array",
+        "defaultValue": []
+      }
+    },
+    "activities": [
+      {
+        "name": "Log_Initial_Region",
+        "type": "AppendVariable",
+        "typeProperties": {
+          "variableName": "ProcessedRegions",
+          "value": {
+            "value": "@pipeline().parameters.RegionCode",
+            "type": "Expression"
+          }
+        }
+      },
+      {
+        "name": "Switch_On_Region",
+        "type": "Switch",
+        "dependsOn": [
+          {
+            "activity": "Log_Initial_Region",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+        "typeProperties": {
+          "on": {
+            "value": "@pipeline().parameters.RegionCode",
+            "type": "Expression"
+          },
+          "cases": [
+            {
+              "value": "US",
+              "activities": [
+                {
+                  "name": "Webhook_US_API",
+                  "type": "Webhook",
+                  "typeProperties": {
+                    "url": "https://api.us-region.internal/trigger",
+                    "method": "POST",
+                    "body": {
+                      "region": "US"
+                    },
+                    "timeout": "00:10:00"
+                  }
+                }
+              ]
+            },
+            {
+              "value": "EU",
+              "activities": [
+                {
+                  "name": "Webhook_EU_API",
+                  "type": "Webhook",
+                  "typeProperties": {
+                    "url": "https://api.eu-region.internal/trigger",
+                    "method": "POST",
+                    "body": {
+                      "region": "EU"
+                    },
+                    "timeout": "00:10:00"
+                  }
+                }
+              ]
+            }
+          ],
+          "defaultActivities": [
+            {
+              "name": "Fail_Unknown_Region",
+              "type": "Fail",
+              "typeProperties": {
+                "message": "Invalid region code provided.",
+                "errorCode": "INVALID_REGION"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
