@@ -19,9 +19,6 @@ def create_excel_report(
     # 2. Pass the buffer directly to ExcelWriter
     with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
 
-        # -----------------------------------
-        # Summary
-        # -----------------------------------
         summary_df = pd.DataFrame([{
             "Pipeline Name": pipeline_name,
             "Total Activities": len(activities),
@@ -35,9 +32,6 @@ def create_excel_report(
 
         summary_df.to_excel(writer, sheet_name="Summary", index=False)
 
-        # -----------------------------------
-        # Activities
-        # -----------------------------------
         activity_rows = []
         for activity in activities:
             activity_rows.append({
@@ -61,21 +55,13 @@ def create_excel_report(
         activities_df = pd.DataFrame(activity_rows)
         activities_df.to_excel(writer, sheet_name="Activities", index=False)
 
-        # -----------------------------------
-        # Lineage
-        # -----------------------------------
+
         lineage_df = pd.DataFrame(lineage)
         lineage_df.to_excel(writer, sheet_name="Lineage", index=False)
 
-        # -----------------------------------
-        # Impact Analysis
-        # -----------------------------------
         impact_df = pd.DataFrame(impact_analysis)
         impact_df.to_excel(writer, sheet_name="ImpactAnalysis", index=False)
 
-        # -----------------------------------
-        # Optimization
-        # -----------------------------------
         optimization_df = pd.DataFrame({"Recommendations": optimization})
         optimization_df.to_excel(writer, sheet_name="Optimization", index=False)
 

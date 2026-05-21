@@ -1,0 +1,6 @@
+[theme]
+primaryColor = "#0058b0"           # Deep Corporate Blue
+backgroundColor = "#f4f6f8"        # Very light grey for the page background
+secondaryBackgroundColor = "#ffffff" # Pure white for sidebars and input areas
+textColor = "#1e293b"              # Slate gray text (softer on the eyes than pure black)
+font = "sans serif"

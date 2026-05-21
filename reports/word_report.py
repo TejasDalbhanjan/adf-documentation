@@ -2,9 +2,6 @@ import io
 from docx import Document
 from docx.shared import Pt
 
-# -----------------------------------
-# CREATE FLOW TEXT
-# -----------------------------------
 def build_dependency_flow(activities):
     flow_text = ""
     for activity in activities:
@@ -35,9 +32,6 @@ def build_dependency_flow(activities):
 
     return flow_text
 
-# -----------------------------------
-# CREATE LINEAGE TEXT
-# -----------------------------------
 def build_lineage_flow(lineage):
     lineage_text = ""
     for item in lineage:
@@ -55,9 +49,7 @@ def build_lineage_flow(lineage):
         )
     return lineage_text
 
-# -----------------------------------
-# CREATE WORD REPORT
-# -----------------------------------
+
 def create_word_report(
     pipeline_name,
     pipeline_parameters,  
@@ -69,15 +61,9 @@ def create_word_report(
 ):
     document = Document()
 
-    # -----------------------------------
-    # TITLE
-    # -----------------------------------
     title = document.add_heading(f"ADF Enterprise Documentation - {pipeline_name}", level=1)
     title.runs[0].font.size = Pt(24)
 
-    # -----------------------------------
-    # EXECUTIVE SUMMARY
-    # -----------------------------------
     document.add_heading("Executive Summary", level=2)
     document.add_paragraph(
 f"""Pipeline Name: {pipeline_name}
@@ -99,9 +85,7 @@ ADF pipeline analysis including:
 """
     )
 
-    # -----------------------------------
-    # ARCHITECTURE FLOW
-    # -----------------------------------
+ 
     document.add_heading("Pipeline Execution Flow", level=2)
     dependency_flow = build_dependency_flow(activities)
     paragraph = document.add_paragraph()
@@ -109,9 +93,6 @@ ADF pipeline analysis including:
     run.font.name = "Courier New"
     run.font.size = Pt(9)
 
-    # -----------------------------------
-    # DATASET LINEAGE
-    # -----------------------------------
     document.add_heading("Dataset Lineage Flow", level=2)
     lineage_flow = build_lineage_flow(lineage)
     paragraph = document.add_paragraph()
@@ -119,9 +100,6 @@ ADF pipeline analysis including:
     run.font.name = "Courier New"
     run.font.size = Pt(9)
 
-    # -----------------------------------
-    # Activity Details Table
-    # -----------------------------------
     document.add_heading("Activity Details", level=1)
 
     for activity in activities:
@@ -151,9 +129,7 @@ ADF pipeline analysis including:
 
         document.add_paragraph("")
 
-    # -----------------------------------
-    # IMPACT ANALYSIS
-    # -----------------------------------
+
     document.add_heading("Impact Analysis", level=2)
     if impact_analysis:
         for impact in impact_analysis:
@@ -161,9 +137,7 @@ ADF pipeline analysis including:
     else:
         document.add_paragraph("No impact issues found.")
 
-    # -----------------------------------
-    # OPTIMIZATION
-    # -----------------------------------
+
     document.add_heading("Optimization Recommendations", level=2)
     if optimization:
         for recommendation in optimization:
