@@ -1,0 +1,416 @@
+{
+  "name": "Master_Enterprise_Orchestration_Pipeline",
+  "properties": {
+
+    "parameters": {
+
+      "Environment": {
+        "type": "String",
+        "defaultValue": "PROD"
+      },
+
+      "LoadType": {
+        "type": "String",
+        "defaultValue": "Incremental"
+      },
+
+      "TriggerTime": {
+        "type": "String"
+      }
+    },
+
+    "variables": {
+
+      "PipelineStatus": {
+        "type": "String"
+      },
+
+      "CurrentExecution": {
+        "type": "String"
+      }
+    },
+
+    "activities": [
+
+      {
+        "name": "Set_Pipeline_Start_Status",
+        "type": "SetVariable",
+
+        "typeProperties": {
+          "variableName": "PipelineStatus",
+          "value": "STARTED"
+        }
+      },
+
+      {
+        "name": "Execute_Ingestion_Pipeline",
+        "type": "ExecutePipeline",
+
+        "dependsOn": [
+          {
+            "activity": "Set_Pipeline_Start_Status",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "pipeline": {
+            "referenceName": "PL_Data_Ingestion",
+            "type": "PipelineReference"
+          },
+
+          "waitOnCompletion": true,
+
+          "parameters": {
+
+            "LoadType": {
+              "value": "@pipeline().parameters.LoadType",
+              "type": "Expression"
+            },
+
+            "Environment": {
+              "value": "@pipeline().parameters.Environment",
+              "type": "Expression"
+            }
+          }
+        }
+      },
+
+      {
+        "name": "Execute_Customer_ETL_Pipeline",
+        "type": "ExecutePipeline",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_Ingestion_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "pipeline": {
+            "referenceName": "PL_Customer_ETL",
+            "type": "PipelineReference"
+          },
+
+          "waitOnCompletion": true,
+
+          "parameters": {
+
+            "SourceSystem": "CRM",
+
+            "LoadType": {
+              "value": "@pipeline().parameters.LoadType",
+              "type": "Expression"
+            }
+          }
+        }
+      },
+
+      {
+        "name": "Execute_Product_ETL_Pipeline",
+        "type": "ExecutePipeline",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_Customer_ETL_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "pipeline": {
+            "referenceName": "PL_Product_ETL",
+            "type": "PipelineReference"
+          },
+
+          "waitOnCompletion": true,
+
+          "parameters": {
+
+            "SourceSystem": "ERP",
+
+            "Environment": {
+              "value": "@pipeline().parameters.Environment",
+              "type": "Expression"
+            }
+          }
+        }
+      },
+
+      {
+        "name": "Execute_Sales_ETL_Pipeline",
+        "type": "ExecutePipeline",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_Product_ETL_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "pipeline": {
+            "referenceName": "PL_Sales_ETL",
+            "type": "PipelineReference"
+          },
+
+          "waitOnCompletion": true,
+
+          "parameters": {
+
+            "LoadType": {
+              "value": "@pipeline().parameters.LoadType",
+              "type": "Expression"
+            }
+          }
+        }
+      },
+
+      {
+        "name": "Parallel_Processing_Group",
+        "type": "ForEach",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_Sales_ETL_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "isSequential": false,
+
+          "items": {
+            "value": "@createArray('Finance','HR','Inventory')",
+            "type": "Expression"
+          },
+
+          "activities": [
+
+            {
+              "name": "Execute_Domain_Pipeline",
+              "type": "ExecutePipeline",
+
+              "typeProperties": {
+
+                "pipeline": {
+                  "referenceName": "PL_Domain_Processing",
+                  "type": "PipelineReference"
+                },
+
+                "waitOnCompletion": true,
+
+                "parameters": {
+
+                  "DomainName": {
+                    "value": "@item()",
+                    "type": "Expression"
+                  },
+
+                  "Environment": {
+                    "value": "@pipeline().parameters.Environment",
+                    "type": "Expression"
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+
+      {
+        "name": "Execute_Data_Validation_Pipeline",
+        "type": "ExecutePipeline",
+
+        "dependsOn": [
+          {
+            "activity": "Parallel_Processing_Group",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "pipeline": {
+            "referenceName": "PL_Data_Validation",
+            "type": "PipelineReference"
+          },
+
+          "waitOnCompletion": true
+        }
+      },
+
+      {
+        "name": "Execute_Databricks_Processing_Pipeline",
+        "type": "ExecutePipeline",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_Data_Validation_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "pipeline": {
+            "referenceName": "PL_Databricks_Processing",
+            "type": "PipelineReference"
+          },
+
+          "waitOnCompletion": true,
+
+          "parameters": {
+
+            "ClusterName": "EnterpriseCluster",
+
+            "Environment": {
+              "value": "@pipeline().parameters.Environment",
+              "type": "Expression"
+            }
+          }
+        }
+      },
+
+      {
+        "name": "Execute_PowerBI_Refresh_Pipeline",
+        "type": "ExecutePipeline",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_Databricks_Processing_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "pipeline": {
+            "referenceName": "PL_PowerBI_Refresh",
+            "type": "PipelineReference"
+          },
+
+          "waitOnCompletion": true
+        }
+      },
+
+      {
+        "name": "Execute_Audit_Pipeline",
+        "type": "ExecutePipeline",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_PowerBI_Refresh_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "pipeline": {
+            "referenceName": "PL_Audit_Framework",
+            "type": "PipelineReference"
+          },
+
+          "waitOnCompletion": true,
+
+          "parameters": {
+
+            "PipelineRunId": {
+              "value": "@pipeline().RunId",
+              "type": "Expression"
+            }
+          }
+        }
+      },
+
+      {
+        "name": "If_All_Pipelines_Succeeded",
+        "type": "IfCondition",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_Audit_Pipeline",
+            "dependencyConditions": ["Succeeded"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "expression": {
+            "value": "@equals(variables('PipelineStatus'),'STARTED')",
+            "type": "Expression"
+          },
+
+          "ifTrueActivities": [
+
+            {
+              "name": "Execute_Success_Notification_Pipeline",
+              "type": "ExecutePipeline",
+
+              "typeProperties": {
+
+                "pipeline": {
+                  "referenceName": "PL_Send_Success_Email",
+                  "type": "PipelineReference"
+                },
+
+                "waitOnCompletion": true
+              }
+            }
+          ],
+
+          "ifFalseActivities": [
+
+            {
+              "name": "Execute_Failure_Notification_Pipeline",
+              "type": "ExecutePipeline",
+
+              "typeProperties": {
+
+                "pipeline": {
+                  "referenceName": "PL_Send_Failure_Email",
+                  "type": "PipelineReference"
+                },
+
+                "waitOnCompletion": true
+              }
+            }
+          ]
+        }
+      },
+
+      {
+        "name": "Fail_Master_Pipeline",
+        "type": "Fail",
+
+        "dependsOn": [
+          {
+            "activity": "Execute_Ingestion_Pipeline",
+            "dependencyConditions": ["Failed"]
+          },
+          {
+            "activity": "Execute_Customer_ETL_Pipeline",
+            "dependencyConditions": ["Failed"]
+          },
+          {
+            "activity": "Execute_Product_ETL_Pipeline",
+            "dependencyConditions": ["Failed"]
+          }
+        ],
+
+        "typeProperties": {
+
+          "message": "Master Enterprise Pipeline Failed",
+          "errorCode": "500"
+        }
+      }
+    ]
+  }
+}

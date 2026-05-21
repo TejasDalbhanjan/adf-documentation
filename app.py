@@ -60,10 +60,10 @@ def apply_enterprise_ui():
 # Apply UI styles immediately
 apply_enterprise_ui()
 
-st.title("Enterprise ADF Pipeline Analyzer")
+st.title("ADF Pipeline Analyzer")
 
 # Handle file uploads
-uploaded_file = st.file_uploader("Upload ADF Pipeline JSON", type=["json"])
+uploaded_file = st.file_uploader("Upload ADF Pipeline JSON/ ARM Template JSON", type=["json"])
 
 if uploaded_file:
     data = json.load(uploaded_file)
