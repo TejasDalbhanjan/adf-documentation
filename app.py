@@ -63,7 +63,7 @@ apply_enterprise_ui()
 st.title("ADF Pipeline Analyzer")
 
 # Handle file uploads
-uploaded_file = st.file_uploader("Upload ADF Pipeline JSON/ ARM Template JSON", type=["json"])
+uploaded_file = st.file_uploader("Upload ADF Pipeline JSON / ARM Template JSON", type=["json"])
 
 if uploaded_file:
     data = json.load(uploaded_file)
@@ -231,34 +231,60 @@ if uploaded_file:
         st.subheader("Impact Analysis")
         st.dataframe(pd.DataFrame(impact_analysis), width="stretch")
 
-        # Generate in-memory buffers for enterprise export
+        # -----------------------------------
+        # Export Report (SaaS Hard Gate)
+        # -----------------------------------
         st.subheader("Export Report")
         
-        excel_buffer = create_excel_report(
-            pipeline_name, activities, lineage, optimization, impact_analysis
-        )
-        word_buffer = create_word_report(
-            pipeline_name, pipeline_parameters, pipeline_variables, 
-            activities, lineage, optimization, impact_analysis
-        )
+        st.info("💡 You can view the full analysis and architecture graphs above for free. To export the official Word & Excel documentation, enter a Premium License Key.")
 
-        # Serve the generated reports directly from memory
-        col1, col2 = st.columns(2)
-        with col1:
-            st.download_button(
-                label="📊 Download Excel Report",
-                data=excel_buffer,
-                file_name=f"{pipeline_name}_enterprise_report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"excel_{pipeline_name}"
-            )
-        with col2:
-            st.download_button(
-                label="📄 Download Word Documentation",
-                data=word_buffer,
-                file_name=f"{pipeline_name}_documentation.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key=f"word_{pipeline_name}"
-            )
+        # Fetch valid keys securely from Streamlit Secrets
+        try:
+            valid_keys = st.secrets["premium_keys"]
+        except KeyError:
+            valid_keys = ["TEJAS-TEST-KEY"] # Fallback for local testing
+
+        # Ask the user for their key
+        user_key = st.text_input("🔑 Premium License Key:", type="password")
+
+        # Verify the key
+        if user_key in valid_keys:
+            st.success("✅ Premium License verified. Your enterprise exports are ready.")
+            
+            # Generate in-memory buffers ONLY if they have a valid key to save server resources
+            excel_buffer = create_excel_report(pipeline_name, activities, lineage, optimization, impact_analysis)
+            word_buffer = create_word_report(pipeline_name, pipeline_parameters, pipeline_variables, activities, lineage, optimization, impact_analysis)
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    label="📊 Download Excel Report",
+                    data=excel_buffer,
+                    file_name=f"{pipeline_name}_enterprise_report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"excel_{pipeline_name}"
+                )
+            with col2:
+                st.download_button(
+                    label="📄 Download Word Documentation",
+                    data=word_buffer,
+                    file_name=f"{pipeline_name}_documentation.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key=f"word_{pipeline_name}"
+                )
+        else:
+            # If they entered a wrong key
+            if user_key:
+                st.error("❌ Invalid License Key. Please check your purchase email.")
+                
+            # The Sales Pitch
+            st.markdown("""
+            ### Want to unlock enterprise exports?
+            Get unlimited Word and Excel exports forever. No recurring subscriptions.
+            
+            [👉 **Click here to get your Unlimited License Key**](https://your-stripe-or-gumroad-link.com)
+            
+            *(Once purchased, enter the key in the box above to unlock immediately).*
+            """)
             
         st.divider()
